@@ -27,10 +27,11 @@ By default, we use 2PC commit to ensure `exactly-once`
   - [x] orc
   - [x] json
   - [x] excel
+  - [x] xml
 
 ## Options
 
-|               name               |  type   | required |               default value                |                                                      remarks                                                      |
+|               Name               |  Type   | Required |                  Default                   |                                                    Description                                                    |
 |----------------------------------|---------|----------|--------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
 | host                             | string  | yes      | -                                          |                                                                                                                   |
 | port                             | int     | yes      | -                                          |                                                                                                                   |
@@ -38,6 +39,7 @@ By default, we use 2PC commit to ensure `exactly-once`
 | password                         | string  | yes      | -                                          |                                                                                                                   |
 | path                             | string  | yes      | -                                          |                                                                                                                   |
 | tmp_path                         | string  | yes      | /tmp/seatunnel                             | The result file will write to a tmp path first and then use `mv` to submit tmp dir to target dir. Need a FTP dir. |
+| connection_mode                  | string  | no       | active_local                               | The target ftp connection mode                                                                                    |
 | custom_filename                  | boolean | no       | false                                      | Whether you need custom the filename                                                                              |
 | file_name_expression             | string  | no       | "${transactionId}"                         | Only used when custom_filename is true                                                                            |
 | filename_time_format             | string  | no       | "yyyy.MM.dd"                               | Only used when custom_filename is true                                                                            |
@@ -55,6 +57,10 @@ By default, we use 2PC commit to ensure `exactly-once`
 | common-options                   | object  | no       | -                                          |                                                                                                                   |
 | max_rows_in_memory               | int     | no       | -                                          | Only used when file_format_type is excel.                                                                         |
 | sheet_name                       | string  | no       | Sheet${Random number}                      | Only used when file_format_type is excel.                                                                         |
+| xml_root_tag                     | string  | no       | RECORDS                                    | Only used when file_format is xml.                                                                                |
+| xml_row_tag                      | string  | no       | RECORD                                     | Only used when file_format is xml.                                                                                |
+| xml_use_attr_format              | boolean | no       | -                                          | Only used when file_format is xml.                                                                                |
+| encoding                         | string  | no       | "UTF-8"                                    | Only used when file_format_type is json,text,csv,xml.                                                             |
 
 ### host [string]
 
@@ -75,6 +81,12 @@ The target ftp password is required
 ### path [string]
 
 The target dir path is required.
+
+### connection_mode [string]
+
+The target ftp connection mode , default is active mode, supported as the following modes:
+
+`active_local` `passive_local`
 
 ### custom_filename [boolean]
 
@@ -108,7 +120,7 @@ When the format in the `file_name_expression` parameter is `xxxx-${now}` , `file
 
 We supported as the following file types:
 
-`text` `json` `csv` `orc` `parquet` `excel`
+`text` `json` `csv` `orc` `parquet` `excel` `xml`
 
 Please note that, The final file name will end with the file_format_type's suffix, the suffix of the text file is `txt`.
 
@@ -186,6 +198,23 @@ When File Format is Excel,The maximum number of data items that can be cached in
 ### sheet_name [string]
 
 Writer the sheet of the workbook
+
+### xml_root_tag [string]
+
+Specifies the tag name of the root element within the XML file.
+
+### xml_row_tag [string]
+
+Specifies the tag name of the data rows within the XML file.
+
+### xml_use_attr_format [boolean]
+
+Specifies Whether to process data using the tag attribute format.
+
+### encoding [string]
+
+Only used when file_format_type is json,text,csv,xml.
+The encoding of the file to write. This param will be parsed by `Charset.forName(encoding)`.
 
 ## Example
 

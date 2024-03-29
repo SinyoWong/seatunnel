@@ -17,6 +17,7 @@
 
 package org.apache.seatunnel.connectors.seatunnel.file.source.reader;
 
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
 import org.apache.seatunnel.api.source.Collector;
 import org.apache.seatunnel.api.table.type.ArrayType;
 import org.apache.seatunnel.api.table.type.BasicType;
@@ -28,14 +29,12 @@ import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
-import org.apache.seatunnel.connectors.seatunnel.file.config.HadoopConf;
+import org.apache.seatunnel.connectors.seatunnel.file.config.BaseSourceConfigOptions;
 import org.apache.seatunnel.connectors.seatunnel.file.exception.FileConnectorErrorCode;
 import org.apache.seatunnel.connectors.seatunnel.file.exception.FileConnectorException;
 
 import org.apache.commons.lang3.tuple.Pair;
-import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Text;
 import org.apache.orc.OrcFile;
@@ -59,6 +58,8 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -83,11 +84,14 @@ public class OrcReadStrategy extends AbstractReadStrategy {
                             path);
             throw new FileConnectorException(FileConnectorErrorCode.FILE_TYPE_INVALID, errorMsg);
         }
-        Configuration configuration = getConfiguration();
-        Path filePath = new Path(path);
         Map<String, String> partitionsMap = parsePartitionsByPath(path);
-        OrcFile.ReaderOptions readerOptions = OrcFile.readerOptions(configuration);
-        try (Reader reader = OrcFile.createReader(filePath, readerOptions)) {
+        try (Reader reader =
+                hadoopFileSystemProxy.doWithHadoopAuth(
+                        (configuration, userGroupInformation) -> {
+                            OrcFile.ReaderOptions readerOptions =
+                                    OrcFile.readerOptions(configuration);
+                            return OrcFile.createReader(new Path(path), readerOptions);
+                        })) {
             TypeDescription schema = TypeDescription.createStruct();
             for (int i = 0; i < seaTunnelRowType.getTotalFields(); i++) {
                 TypeDescription typeDescription =
@@ -129,12 +133,14 @@ public class OrcReadStrategy extends AbstractReadStrategy {
     }
 
     @Override
-    public SeaTunnelRowType getSeaTunnelRowTypeInfo(HadoopConf hadoopConf, String path)
-            throws FileConnectorException {
-        Configuration configuration = getConfiguration(hadoopConf);
-        OrcFile.ReaderOptions readerOptions = OrcFile.readerOptions(configuration);
-        Path dstDir = new Path(path);
-        try (Reader reader = OrcFile.createReader(dstDir, readerOptions)) {
+    public SeaTunnelRowType getSeaTunnelRowTypeInfo(String path) throws FileConnectorException {
+        try (Reader reader =
+                hadoopFileSystemProxy.doWithHadoopAuth(
+                        ((configuration, userGroupInformation) -> {
+                            OrcFile.ReaderOptions readerOptions =
+                                    OrcFile.readerOptions(configuration);
+                            return OrcFile.createReader(new Path(path), readerOptions);
+                        }))) {
             TypeDescription schema = reader.getSchema();
             List<String> fieldNames = schema.getFieldNames();
             if (readColumns.isEmpty()) {
@@ -168,12 +174,9 @@ public class OrcReadStrategy extends AbstractReadStrategy {
     boolean checkFileType(String path) {
         try {
             boolean checkResult;
-            Configuration configuration = getConfiguration();
-            FileSystem fileSystem = FileSystem.get(configuration);
-            Path filePath = new Path(path);
-            FSDataInputStream in = fileSystem.open(filePath);
+            FSDataInputStream in = hadoopFileSystemProxy.getInputStream(path);
             // try to get Postscript in orc file
-            long size = fileSystem.getFileStatus(filePath).getLen();
+            long size = hadoopFileSystemProxy.getFileStatus(path).getLen();
             int readSize = (int) Math.min(size, MIN_SIZE);
             in.seek(size - readSize);
             ByteBuffer buffer = ByteBuffer.allocate(readSize);
@@ -355,15 +358,46 @@ public class OrcReadStrategy extends AbstractReadStrategy {
     }
 
     private Object readBytesVal(ColumnVector colVec, TypeDescription typeDescription, int rowNum) {
+        Charset charset = StandardCharsets.UTF_8;
+        if (pluginConfig != null) {
+            charset =
+                    ReadonlyConfig.fromConfig(pluginConfig)
+                            .getOptional(BaseSourceConfigOptions.ENCODING)
+                            .map(Charset::forName)
+                            .orElse(StandardCharsets.UTF_8);
+        }
+
         Object bytesObj = null;
         if (!colVec.isNull[rowNum]) {
             BytesColumnVector bytesVector = (BytesColumnVector) colVec;
-            bytesObj = bytesVector.toString(rowNum);
-            if (typeDescription.getCategory() == TypeDescription.Category.BINARY) {
-                bytesObj = ((String) bytesObj).getBytes();
+            bytesObj = this.bytesVectorToString(bytesVector, rowNum, charset);
+            if (typeDescription.getCategory() == TypeDescription.Category.BINARY
+                    && bytesObj != null) {
+                bytesObj = ((String) bytesObj).getBytes(charset);
             }
         }
         return bytesObj;
+    }
+
+    /**
+     * copied from {@link BytesColumnVector#toString(int)}
+     *
+     * @param bytesVector the BytesColumnVector
+     * @param row rowNum
+     * @param charset read charset
+     */
+    private Object bytesVectorToString(BytesColumnVector bytesVector, int row, Charset charset) {
+        if (bytesVector.isRepeating) {
+            row = 0;
+        }
+
+        return !bytesVector.noNulls && bytesVector.isNull[row]
+                ? null
+                : new String(
+                        bytesVector.vector[row],
+                        bytesVector.start[row],
+                        bytesVector.length[row],
+                        charset);
     }
 
     private Object readDecimalVal(ColumnVector colVec, int rowNum) {
